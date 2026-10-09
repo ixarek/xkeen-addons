@@ -90,6 +90,15 @@ mkdir -p "$PIDS_DIR" "$LOGS_DIR"
 # Прокси под нагрузкой упирается в дефолтные 1024 дескриптора.
 ulimit -n 65536 2>/dev/null || true
 
+running_one() {{
+    [ -s "$pidfile" ] || return 1
+    pid=$(cat "$pidfile")
+    case "$pid" in ''|*[!0-9]*|0|1) return 1 ;; esac
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr '\\000' '\\n' < "/proc/$pid/cmdline" | grep -Fx "$config" >/dev/null || return 1
+    kill -0 "$pid" 2>/dev/null
+}}
+
 start_one() {{
     name="$1"
     config="$CONFIG_DIR/$name.yaml"
@@ -99,28 +108,27 @@ start_one() {{
         echo "mihomo: пропускаем $name — конфига нет"
         return
     fi
-    if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    if running_one; then
         echo "mihomo: $name уже запущен"
         return
     fi
     echo "mihomo: запускаем $name"
     nohup "$BINARY" -d "$CONFIG_DIR" -f "$config" </dev/null >> "$logfile" 2>&1 &
-    echo $! > "$pidfile"
+    echo $! > "$pidfile.new"
+    mv -f "$pidfile.new" "$pidfile"
 }}
 
 stop_one() {{
     name="$1"
+    config="$CONFIG_DIR/$name.yaml"
     pidfile="$PIDS_DIR/mihomo-$name.pid"
-    if [ -f "$pidfile" ]; then
-        pid=$(cat "$pidfile")
-        if kill -0 "$pid" 2>/dev/null; then
+    if running_one; then
             echo "mihomo: останавливаем $name"
             kill -TERM "$pid"
             sleep 1
             kill -0 "$pid" 2>/dev/null && kill -KILL "$pid"
-        fi
-        rm -f "$pidfile"
     fi
+    rm -f "$pidfile"
 }}
 
 case "$1" in

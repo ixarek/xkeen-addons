@@ -219,6 +219,39 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(before, (ROOT / 'install.sh').read_bytes())
 
 
+@unittest.skipIf(os.name == 'nt', 'Service regression tests need Linux /proc and BusyBox')
+class ServiceTests(unittest.TestCase):
+    def test_panel_invalid_or_reused_pid(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            pidfile = path / 'panel.pid'
+            script = path / 'service.sh'
+            text = (ROOT / 'tools/panel-service.sh').read_text()
+            script.write_text(text.replace('PID_FILE=/opt/var/run/zapret-gui.pid', 'PID_FILE=' + str(pidfile)))
+            for value in ('', '0', '1', 'broken', str(os.getpid()), '99999999'):
+                pidfile.write_text(value)
+                result = subprocess.run(['busybox', 'ash', str(script), 'status'], capture_output=True, text=True, start_new_session=True)
+                self.assertEqual(result.returncode, 1, (value, result.stdout))
+                result = subprocess.run(['busybox', 'ash', str(script), 'stop'], capture_output=True, text=True, start_new_session=True)
+                self.assertEqual(result.returncode, 0, value)
+                self.assertFalse(pidfile.exists())
+
+    def test_core_invalid_or_reused_pid(self):
+        autostart = module('autostart', ROOT / 'addon/core/mihomo_autostart.py')
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            pids = path / 'pids'
+            pids.mkdir()
+            pidfile = pids / 'mihomo-home-tun.pid'
+            script = path / 'core-service.sh'
+            script.write_text(autostart._entware_init_script('/fake/mihomo', str(path), str(pids), str(path), ['home-tun']))
+            for value in ('', '0', '1', 'broken', str(os.getpid()), '99999999'):
+                pidfile.write_text(value)
+                result = subprocess.run(['busybox', 'ash', str(script), 'stop'], capture_output=True, text=True, start_new_session=True)
+                self.assertEqual(result.returncode, 0, value)
+                self.assertFalse(pidfile.exists())
+
+
 class LifecycleTests(unittest.TestCase):
     def test_install_and_failed_route_rollback(self):
         # Exercise all filesystem mutations, backup and rollback in an isolated root.
