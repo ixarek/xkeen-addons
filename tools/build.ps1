@@ -16,3 +16,12 @@ if (-not $template.Contains('__PAYLOADS__')) { throw 'Missing template payload m
 $installer = $template.Replace('__PAYLOADS__', $payloads.TrimEnd("`n"))
 [IO.File]::WriteAllText((Join-Path $repoPath 'install-xkeen-addons.sh'), $installer, $utf8)
 Write-Output 'Built install-xkeen-addons.sh'
+$fullTemplate = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'full-installer.template.sh')).Replace("`r`n", "`n")
+if (-not $fullTemplate.Contains('__ADDON_INSTALLER__')) { throw 'Missing full-installer payload marker' }
+$encodedInstaller = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($installer))
+$lines = for ($offset = 0; $offset -lt $encodedInstaller.Length; $offset += 76) {
+    $encodedInstaller.Substring($offset, [Math]::Min(76, $encodedInstaller.Length - $offset))
+}
+$fullInstaller = $fullTemplate.Replace('__ADDON_INSTALLER__', ($lines -join "`n"))
+[IO.File]::WriteAllText((Join-Path $repoPath 'install.sh'), $fullInstaller, $utf8)
+Write-Output 'Built install.sh'

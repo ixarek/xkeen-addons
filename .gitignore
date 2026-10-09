@@ -5,3 +5,4 @@ source-url
 subscription*.json
 user.json
 config.yaml
+__pycache__/

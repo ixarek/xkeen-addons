@@ -30,7 +30,10 @@ if [ "$cmd" = ping ]; then
  /opt/sbin/xray run -c "$tmp/probe.json" >> "$tmp/probe.log" 2>&1 & pid=$!
  sleep 1
  jq -r --argjson i "$idx" '.servers[$i].name' "$data"
- curl --proxy socks5h://127.0.0.1:1189 --connect-timeout 5 --max-time 12 -sS -o /dev/null -w 'HTTP %{http_code}; full HTTPS request %{time_total} s\n' https://www.gstatic.com/generate_204
+ result=$(curl --proxy socks5h://127.0.0.1:1189 --connect-timeout 5 --max-time 12 -sS -o /dev/null -w '%{http_code} %{time_total}' https://www.gstatic.com/generate_204) || { echo 'Proxy request failed'; exit 1; }
+ code=${result%% *}; elapsed=${result#* }
+ echo "HTTP $code; full HTTPS request $elapsed s"
+ [ "$code" = 204 ] || { echo 'Unexpected health-check response'; exit 1; }
  exit
 fi
 jq '{outbounds:[{tag:"direct",protocol:"freedom"},{tag:"block",protocol:"blackhole"},(.outbounds[0]|.tag="vless-reality")]}' "$tmp/04_outbounds.choice.json" > "$tmp/outbounds.json"
@@ -42,14 +45,17 @@ cp /opt/etc/xray/configs/04_outbounds.json "$tmp/previous.json"
 cp "$data" "$tmp/previous-subscription.json"
 jq --argjson i "$idx" '.active_id=$i | .servers |= map(.active=(.id==$i))' "$data" > "$tmp/subscription.json"
 sh /opt/etc/init.d/S99xkeen-panel stop >/dev/null
-cp "$tmp/outbounds.json" /opt/etc/xray/configs/04_outbounds.json
+cp "$tmp/outbounds.json" /opt/etc/xray/configs/04_outbounds.json.new
+mv /opt/etc/xray/configs/04_outbounds.json.new /opt/etc/xray/configs/04_outbounds.json
 cp "$tmp/subscription.json" "$data.new"; mv "$data.new" "$data"; sync
-xkeen -restart > "$tmp/restart.log" 2>&1
+restart_ok=yes
+xkeen -restart > "$tmp/restart.log" 2>&1 || restart_ok=no
 sleep 2
-if ! pidof xray >/dev/null; then
- cp "$tmp/previous.json" /opt/etc/xray/configs/04_outbounds.json
+if [ "$restart_ok" = no ] || ! pidof xray >/dev/null; then
+ cp "$tmp/previous.json" /opt/etc/xray/configs/04_outbounds.json.new
+ mv /opt/etc/xray/configs/04_outbounds.json.new /opt/etc/xray/configs/04_outbounds.json
  cp "$tmp/previous-subscription.json" "$data.new"; mv "$data.new" "$data"; sync
- xkeen -restart > "$tmp/rollback.log" 2>&1
+ xkeen -restart > "$tmp/rollback.log" 2>&1 || true
  sh /opt/etc/init.d/S99xkeen-panel start >/dev/null
  echo 'Start failed; previous configuration restored'; exit 1
 fi

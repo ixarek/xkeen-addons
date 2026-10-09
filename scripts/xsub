@@ -10,9 +10,9 @@ mode=${1:-update}
 case "$mode" in
  change)
  printf 'HTTPS subscription URL: '
- stty -echo
+ if [ -t 0 ]; then stty -echo; fi
  IFS= read -r url
- stty echo
+ if [ -t 0 ]; then stty echo; fi
  printf '\n'
  case "$url" in https://*) ;; *) echo 'HTTPS URL required'; exit 1;; esac
  printf '%s\n' "$url" > "$tmp/source-url"
@@ -41,7 +41,14 @@ while IFS= read -r uri; do
  name=${uri#*#}
  name=$(printf '%b' "$(printf '%s' "$name" | sed 's/%/\\x/g')")
  endpoint=${uri#*@}; endpoint=${endpoint%%\?*}; endpoint=${endpoint%%#*}
- address=${endpoint%:*}; address=${address#\[}; address=${address%\]}; port=${endpoint##*:}
+ case "$endpoint" in
+  \[*\]:*) address=${endpoint%:*}; port=${endpoint##*:};;
+  \[*\]) address=$endpoint; port=443;;
+  *:*) address=${endpoint%:*}; port=${endpoint##*:};;
+  *) address=$endpoint; port=443;;
+ esac
+ address=${address#\[}; address=${address%\]}
+ case "$uri" in *'#'*) ;; *) name=$address;; esac
  jq -nc --arg raw "$uri" --arg name "$name" --arg addr "$address" --argjson port "$port" --argjson id "$i" '{id:$id,name:$name,address:$addr,port:$port,protocol:"vless",active:false,latency_ms:-1,raw_uri:$raw}' >> "$tmp/servers.jsonl"
  i=$((i+1))
 done < "$tmp/vless.txt"
@@ -55,11 +62,16 @@ cp "$data" "$root/subscription.previous.json"
 sh /opt/etc/init.d/S99xkeen-panel stop >/dev/null
 cp "$tmp/vless.txt" /opt/var/subscription/vless.txt.new
 mv /opt/var/subscription/vless.txt.new /opt/var/subscription/vless.txt
-cp "$tmp/subscription.json" "$data.new"; mv "$data.new" "$data"
+cp "$tmp/subscription.json" "$data.new"; mv "$data.new" "$data"; sync
 if [ "$mode" != import ]; then
- cp "$tmp/body" /opt/var/subscription/oversub.txt
+ cp "$tmp/body" /opt/var/subscription/oversub.txt.new
+ mv /opt/var/subscription/oversub.txt.new /opt/var/subscription/oversub.txt
 fi
-if [ "$mode" = change ]; then cp "$tmp/source-url" "$root/source-url"; fi
+if [ "$mode" = change ]; then
+ cp "$tmp/source-url" "$root/source-url.new"
+ mv "$root/source-url.new" "$root/source-url"
+fi
+sync
 sh /opt/etc/init.d/S99xkeen-panel start >/dev/null
 echo "VLESS servers: $i. Active Xray connection unchanged."
 if [ "$(jq -r '.active_id' "$data")" = -1 ]; then
