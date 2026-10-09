@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+. /opt/lib/mtun-lib.sh
+mkdir -p "$MT_RUN"
+# Serialise service, cron and firewall callbacks. A stale lock can be recovered
+# because its holder PID is recorded; startup never blindly kills processes.
+if ! mkdir "$MT_RUN/lock" 2>/dev/null; then
+ holder=$(cat "$MT_RUN/lock/pid" 2>/dev/null || true)
+ case "$holder" in ''|*[!0-9]*) exit 0;; esac
+ if kill -0 "$holder" 2>/dev/null; then exit 0; fi
+ rm -f "$MT_RUN/lock/pid"; rmdir "$MT_RUN/lock" || exit 1
+ mkdir "$MT_RUN/lock"
+fi
+echo $$ > "$MT_RUN/lock/pid"
+trap 'rm -f "$MT_RUN/lock/pid"; rmdir "$MT_RUN/lock"' EXIT
+start_core() {
+ [ -f "$MT_HOME/enabled" ] || return 0
+ mt_validate_clients "$MT_HOME/clients" || mt_die 'Configure mtun clients first.'
+ mt_apply
+ if ! mt_pid; then
+  [ -c /dev/net/tun ] || mt_die '/dev/net/tun unavailable; enable TUN support in firmware.'
+  # RAM log, capped on each restart. No per-flow access logs on USB.
+  : > "$MT_RUN/core.log"
+  /opt/sbin/mihomo-tun-core -d "$MT_HOME" -f "$MT_HOME/config.json" > "$MT_RUN/core.log" 2>&1 &
+  echo $! > "$MT_RUN/pid"
+ fi
+ tries=0
+ until mt_pid && ip link show "$MT_DEV" >/dev/null 2>&1 && mt_request /version >/dev/null 2>&1; do
+  tries=$((tries+1)); [ "$tries" -lt 20 ] || mt_die "TUN/core startup failed; see $MT_RUN/core.log"
+  sleep 1
+ done
+ mt_apply
+}
+stop_core() {
+ if mt_pid; then
+  kill "$mt_pid_value"
+  tries=0
+  while mt_pid; do
+   tries=$((tries+1)); [ "$tries" -lt 10 ] || mt_die 'Core did not stop; routes remain guarded.'
+   sleep 1
+  done
+ fi
+ rm -f "$MT_RUN/pid"
+}
+case "${1:-start}" in
+ start) start_core;;
+ stop) rm -f "$MT_HOME/enabled"; stop_core; mt_clear;;
+ restart) stop_core; start_core;;
+ enable) touch "$MT_HOME/enabled"; start_core;;
+ guard) if [ -f "$MT_HOME/enabled" ]; then start_core; fi;;
+ firewall) if [ -f "$MT_HOME/enabled" ]; then mt_apply; fi;;
+ status) if mt_pid; then echo "Mihomo PID $mt_pid_value"; else echo 'Mihomo stopped'; fi; ip -4 route show table "$MT_TABLE";;
+ *) echo 'Usage: S80mihomo-tun start|stop|restart|enable|guard|firewall|status'; exit 1;;
+esac
