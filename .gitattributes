@@ -1,4 +1,2 @@
 * text=auto eol=lf
-*.sh text eol=lf
-scripts/* text eol=lf
-*.ps1 text eol=lf
+install.sh text eol=lf

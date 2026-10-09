@@ -1,7 +1,5 @@
-name: Check installers
-on:
-  push:
-  pull_request:
+name: Check TUN installer
+on: [push, pull_request]
 permissions:
   contents: read
 jobs:
@@ -9,27 +7,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install test tools
-        run: sudo apt-get update && sudo apt-get install -y busybox jq
-      - name: Build standalone installers
-        shell: pwsh
-        run: ./tools/build.ps1
-      - name: Verify reproducible build
-        run: git diff --exit-code -- install.sh install-xkeen-addons.sh install-mihomo-tun.sh
-      - name: Check BusyBox ash syntax
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Dependencies
         run: |
-          for file in install.sh install-xkeen-addons.sh install-mihomo-tun.sh scripts/* tools/*.template.sh; do
-            busybox ash -n "$file"
-          done
-      - name: Offline subscription and setup tests
-        run: python3 tests/test_setup.py
-      - name: Download pinned Mihomo for integration checks
+          sudo apt-get update && sudo apt-get install -y busybox
+          python -m pip install PyYAML
+      - name: Pinned upstream and native core
         run: |
-          curl --proto '=https' --proto-redir '=https' -fLsS --retry 3 https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz -o /tmp/mihomo.gz
+          curl -fLsS --retry 3 https://codeload.github.com/avatarDD/zapret-gui/tar.gz/bcffb595af46bac72727c8a5b05ea82635b58efa -o /tmp/gui.tar.gz
+          echo 'd06448df4d7ab95da20ee7ecfc90c2283545e4955d21b10d07538af1e8f616eb  /tmp/gui.tar.gz' | sha256sum -c -
+          mkdir -p /tmp/gui
+          tar -xzf /tmp/gui.tar.gz -C /tmp/gui --strip-components=1
+          curl -fLsS --retry 3 https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz -o /tmp/mihomo.gz
           echo 'ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20  /tmp/mihomo.gz' | sha256sum -c -
-          gzip -dc /tmp/mihomo.gz > /tmp/mihomo-test
-          chmod +x /tmp/mihomo-test
-      - name: TUN scripts and native Mihomo provider/API tests
+          gzip -dc /tmp/mihomo.gz > /tmp/mihomo
+          chmod +x /tmp/mihomo
+      - name: Build and test
         env:
-          MIHOMO_BIN: /tmp/mihomo-test
-        run: python3 tests/test_mtun.py
+          ZAPRET_SOURCE: /tmp/gui
+          MIHOMO_BIN: /tmp/mihomo
+        run: |
+          python tools/build.py
+          git diff --exit-code -- install.sh
+          python -m unittest discover -s tests -v
+          busybox ash -n install.sh
+          busybox ash -n tools/panel-service.sh
+          node --check addon/web/js/pages/mihomo.js
+      - name: Test embedded extraction
+        run: |
+          busybox ash install.sh --extract /tmp/installer-payload
+          python -m py_compile /tmp/installer-payload/installer.py
+          cmp /tmp/installer-payload/api/mihomo_subscription.py addon/api/mihomo_subscription.py
