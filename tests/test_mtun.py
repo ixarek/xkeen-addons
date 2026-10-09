@@ -144,6 +144,28 @@ case " $* " in *' -C '*) exit 1;; esac
         self.assertFalse((self.root / "trace").exists())
         self.assertEqual(list((opt / "etc").iterdir()), [])
 
+    def test_shutdown_preserves_autostart_but_explicit_disable_removes_it(self):
+        home, run = self.root / "home", self.root / "run"
+        self.write(home / "enabled", "")
+        library = self.root / "service-lib.sh"
+        self.write(library, 'MT_HOME="$1"\nMT_RUN="$2"\n'
+                   'mt_pid() { return 1; }\nmt_clear() { :; }\n')
+        source = (REPO / "scripts/S80mihomo-tun").read_text()
+        # The service receives command as $1. Fixture paths are environment values.
+        self.write(library, 'MT_HOME="$TEST_HOME"\nMT_RUN="$TEST_RUN"\n'
+                   'mt_pid() { return 1; }\nmt_clear() { :; }\n')
+        source = source.replace(". /opt/lib/mtun-lib.sh", '. "$TEST_LIBRARY"')
+        script = self.root / "service.sh"
+        self.write(script, source)
+        env = dict(self.env, TEST_HOME=posix(home), TEST_RUN=posix(run), TEST_LIBRARY=posix(library))
+        for command in ("stop", "disable"):
+            result = subprocess.run([BASH, posix(script), command], env=env,
+                                    capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((home / "enabled").exists(), command == "stop")
+            self.assertTrue((run / "stopped").exists())
+            self.assertFalse((run / "lock").exists())
+
 
 @unittest.skipUnless(CORE and BASH and JQ, "MIHOMO_BIN, bash and jq required")
 class RealMihomo(TunScripts):
@@ -153,6 +175,7 @@ class RealMihomo(TunScripts):
     test_routes_and_dns_are_limited_to_selected_client = None
     test_embedded_scripts_match = None
     test_check_mode_does_not_install_or_write_configuration = None
+    test_shutdown_preserves_autostart_but_explicit_disable_removes_it = None
 
     def start(self, body):
         self.write(self.root / "subscription.txt", body)

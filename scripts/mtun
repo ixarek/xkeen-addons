@@ -105,7 +105,7 @@ case "${1:-status}" in
  ;;
  start) sh "$service" enable;;
  panel) echo "Panel: http://$(jq -r '.["external-controller"]' "$MT_HOME/config.json")/ui/"; echo "Secret: $(jq -r '.secret' "$MT_HOME/config.json")";;
- stop) sh "$service" stop; echo 'TUN disabled; clients return to ordinary router routing.';;
+ stop) sh "$service" disable; echo 'TUN disabled; clients return to ordinary router routing.';;
  status)
   sh "$service" status
   echo 'Clients (IPv4 MAC):'; cat "$MT_HOME/clients"

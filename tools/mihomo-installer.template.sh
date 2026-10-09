@@ -63,7 +63,7 @@ prompt 'PC IPv4 address (for example 192.168.1.50): '
 client_ip=$answer
 phase 'Entware dependencies'
 opkg update
-opkg install curl ca-bundle jq tar gzip ip-full conntrack cron
+opkg install curl ca-bundle jq tar gzip ip-full conntrack cron coreutils-nohup
 mkdir -p /opt/lib /opt/etc/mihomo-tun /opt/var/run /opt/etc/ndm/netfilter.d
 __TUN_PAYLOADS__
 chmod 755 /opt/sbin/mtun /opt/etc/init.d/S80mihomo-tun

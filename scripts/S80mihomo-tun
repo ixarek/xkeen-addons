@@ -21,7 +21,7 @@ start_core() {
   [ -c /dev/net/tun ] || mt_die '/dev/net/tun unavailable; enable TUN support in firmware.'
   # RAM log, capped on each restart. No per-flow access logs on USB.
   : > "$MT_RUN/core.log"
-  /opt/sbin/mihomo-tun-core -d "$MT_HOME" -f "$MT_HOME/config.json" > "$MT_RUN/core.log" 2>&1 &
+  nohup /opt/sbin/mihomo-tun-core -d "$MT_HOME" -f "$MT_HOME/config.json" < /dev/null > "$MT_RUN/core.log" 2>&1 &
   echo $! > "$MT_RUN/pid"
  fi
  tries=0
@@ -43,12 +43,14 @@ stop_core() {
  rm -f "$MT_RUN/pid"
 }
 case "${1:-start}" in
- start) start_core;;
- stop) rm -f "$MT_HOME/enabled"; stop_core; mt_clear;;
- restart) stop_core; start_core;;
- enable) touch "$MT_HOME/enabled"; start_core;;
- guard) if [ -f "$MT_HOME/enabled" ]; then start_core; fi;;
- firewall) if [ -f "$MT_HOME/enabled" ]; then mt_apply; fi;;
+ start) rm -f "$MT_RUN/stopped"; start_core;;
+ # Entware calls stop on shutdown: retain the persistent autostart flag.
+ stop) touch "$MT_RUN/stopped"; stop_core; mt_clear;;
+ disable) rm -f "$MT_HOME/enabled"; touch "$MT_RUN/stopped"; stop_core; mt_clear;;
+ restart) rm -f "$MT_RUN/stopped"; stop_core; start_core;;
+ enable) touch "$MT_HOME/enabled"; rm -f "$MT_RUN/stopped"; start_core;;
+ guard) if [ -f "$MT_HOME/enabled" ] && [ ! -f "$MT_RUN/stopped" ]; then start_core; fi;;
+ firewall) if [ -f "$MT_HOME/enabled" ] && [ ! -f "$MT_RUN/stopped" ]; then mt_apply; fi;;
  status) if mt_pid; then echo "Mihomo PID $mt_pid_value"; else echo 'Mihomo stopped'; fi; ip -4 route show table "$MT_TABLE";;
- *) echo 'Usage: S80mihomo-tun start|stop|restart|enable|guard|firewall|status'; exit 1;;
+ *) echo 'Usage: S80mihomo-tun start|stop|restart|enable|disable|guard|firewall|status'; exit 1;;
 esac
