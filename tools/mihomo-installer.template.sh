@@ -139,7 +139,7 @@ for file in config.json clients subscription.txt source-url; do
  [ ! -f "$MT_HOME/$file" ] || cp -a "$MT_HOME/$file" "$backup/$file"
 done
 if [ -f "$MT_HOME/config.json" ]; then secret=$(jq -r '.secret' "$MT_HOME/config.json")
-else secret=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n'); fi
+else secret=$(mt_random_secret); fi
 [ -n "$secret" ] && [ "$secret" != null ] || die 'Invalid panel secret.'
 mt_generate "$lan_ip" "$secret" true > "$tmp/config.json"
 unset secret

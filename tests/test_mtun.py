@@ -61,6 +61,14 @@ class TunScripts(unittest.TestCase):
         self.assertTrue(all(x.endswith("#PROXY") for x in config["dns"]["nameserver"]))
         self.assertEqual(config["external-controller"], "192.168.1.1:9090")
 
+    def test_random_secret_does_not_require_gnu_od(self):
+        self.write(self.bin / "od", "#!/bin/sh\nexit 99\n")
+        first = self.shell('mt_random_secret')
+        second = self.shell('mt_random_secret')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertRegex(first.stdout.strip(), r'^[0-9a-f]{64}$')
+        self.assertNotEqual(first.stdout, second.stdout)
+
     def test_client_validation_rejects_injection_and_invalid_addresses(self):
         for ip, mac, valid in [
             ("192.168.1.20", "aa:bb:cc:dd:ee:ff", True),
@@ -171,6 +179,7 @@ case " $* " in *' -C '*) exit 1;; esac
 class RealMihomo(TunScripts):
     # Keep integration cases separate from the script-only test count.
     test_config_has_native_tun_and_no_direct_fallback = None
+    test_random_secret_does_not_require_gnu_od = None
     test_client_validation_rejects_injection_and_invalid_addresses = None
     test_routes_and_dns_are_limited_to_selected_client = None
     test_embedded_scripts_match = None

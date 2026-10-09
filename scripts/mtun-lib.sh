@@ -9,6 +9,7 @@ MT_TABLE=2023
 MT_PREF=100
 MT_DEV=mhtun0
 mt_die() { echo "ERROR: $*" >&2; exit 1; }
+mt_random_secret() { dd if=/dev/urandom bs=32 count=1 2>/dev/null | sha256sum | cut -d' ' -f1; }
 # API URL must precede curl's remaining options; keep credentials out of URLs.
 mt_request() {
  mt_path=$1; shift
@@ -60,7 +61,7 @@ mt_validate_provider() (
  # The subshell owns its validator process and cleans it on every exit path.
  mt_dir=$1
  mt_core=${2:-/opt/sbin/mihomo-tun-core}
- mt_secret=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+ mt_secret=$(mt_random_secret)
  jq --arg secret "$mt_secret" '.secret=$secret | .tun.enable=false | .["external-controller"]="127.0.0.1:19091" | .["mixed-port"]=0 | .dns.enable=false | del(.["external-ui"]) | .profile["store-selected"]=false' "$mt_dir/config.json" > "$mt_dir/validate.json"
  "$mt_core" -t -d "$mt_dir" -f "$mt_dir/validate.json" > "$mt_dir/validate.log" 2>&1 || exit 1
  "$mt_core" -d "$mt_dir" -f "$mt_dir/validate.json" > "$mt_dir/validate.log" 2>&1 &
