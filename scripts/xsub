@@ -33,13 +33,24 @@ if grep -q '^vless://' "$tmp/body"; then
 else
  base64 -d "$tmp/body" > "$tmp/decoded" 2>/dev/null || { echo 'Not a URI/Base64 subscription'; exit 1; }
 fi
+tr -d '\r' < "$tmp/decoded" > "$tmp/decoded.clean"; mv "$tmp/decoded.clean" "$tmp/decoded"
 sed -n '/^vless:\/\//p' "$tmp/decoded" > "$tmp/vless.txt"
 [ -s "$tmp/vless.txt" ] || { echo 'No VLESS servers; previous subscription kept'; exit 1; }
 : > "$tmp/servers.jsonl"
 i=0
 while IFS= read -r uri; do
  name=${uri#*#}
- name=$(printf '%b' "$(printf '%s' "$name" | sed 's/%/\\x/g')")
+ # POSIX printf supports octal escapes; hexadecimal escapes differ by shell.
+ name=$(printf '%b' "$(printf '%s' "$name" | LC_ALL=C awk '
+ BEGIN {hex="0123456789abcdef"}
+ {for (n=1; n<=length($0); n++) {
+   c=substr($0,n,1); pair=tolower(substr($0,n+1,2))
+   if (c=="%" && length(pair)==2 && pair ~ /^[0-9a-f][0-9a-f]$/) {
+     byte=(index(hex,substr(pair,1,1))-1)*16+index(hex,substr(pair,2,1))-1
+     printf "\\0%03o",byte; n+=2
+   } else if (c=="\\") printf "\\\\"
+   else printf "%s",c
+ }}')")
  endpoint=${uri#*@}; endpoint=${endpoint%%\?*}; endpoint=${endpoint%%#*}
  case "$endpoint" in
   \[*\]:*) address=${endpoint%:*}; port=${endpoint##*:};;
