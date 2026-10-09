@@ -1,0 +1,7 @@
+*.log
+*.tmp
+*.tar.gz
+source-url
+subscription*.json
+user.json
+config.yaml

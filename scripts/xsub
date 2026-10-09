@@ -1,0 +1,67 @@
+#!/bin/sh
+set -eu
+umask 077
+root=/opt/etc/xserver
+data=/opt/etc/xkeen-panel/data/subscription.json
+mkdir -p "$root" /opt/tmp/xserver
+tmp=$(mktemp -d /opt/tmp/xserver/sub.XXXXXX)
+trap 'stty echo 2>/dev/null || true; rm -rf "$tmp"' EXIT HUP INT TERM
+mode=${1:-update}
+case "$mode" in
+ change)
+ printf 'HTTPS subscription URL: '
+ stty -echo
+ IFS= read -r url
+ stty echo
+ printf '\n'
+ case "$url" in https://*) ;; *) echo 'HTTPS URL required'; exit 1;; esac
+ printf '%s\n' "$url" > "$tmp/source-url"
+ ;;
+ update)
+ if [ ! -s "$root/source-url" ]; then echo 'Run xsub change first'; exit 1; fi
+ url=$(cat "$root/source-url")
+ ;;
+ import) cp /opt/var/subscription/oversub.txt "$tmp/body";;
+ *) echo 'Usage: xsub change | update | import'; exit 1;;
+esac
+if [ "$mode" != import ]; then
+ curl --proto '=https' --proto-redir '=https' -fLsS --connect-timeout 10 --max-time 60 --max-filesize 2097152 "$url" > "$tmp/body" 2>"$tmp/download.log" || { echo 'Download failed; previous subscription kept'; exit 1; }
+fi
+tr -d '\r' < "$tmp/body" > "$tmp/body.clean"; mv "$tmp/body.clean" "$tmp/body"
+if grep -q '^vless://' "$tmp/body"; then
+ cp "$tmp/body" "$tmp/decoded"
+else
+ base64 -d "$tmp/body" > "$tmp/decoded" 2>/dev/null || { echo 'Not a URI/Base64 subscription'; exit 1; }
+fi
+sed -n '/^vless:\/\//p' "$tmp/decoded" > "$tmp/vless.txt"
+[ -s "$tmp/vless.txt" ] || { echo 'No VLESS servers; previous subscription kept'; exit 1; }
+: > "$tmp/servers.jsonl"
+i=0
+while IFS= read -r uri; do
+ name=${uri#*#}
+ name=$(printf '%b' "$(printf '%s' "$name" | sed 's/%/\\x/g')")
+ endpoint=${uri#*@}; endpoint=${endpoint%%\?*}; endpoint=${endpoint%%#*}
+ address=${endpoint%:*}; address=${address#\[}; address=${address%\]}; port=${endpoint##*:}
+ jq -nc --arg raw "$uri" --arg name "$name" --arg addr "$address" --argjson port "$port" --argjson id "$i" '{id:$id,name:$name,address:$addr,port:$port,protocol:"vless",active:false,latency_ms:-1,raw_uri:$raw}' >> "$tmp/servers.jsonl"
+ i=$((i+1))
+done < "$tmp/vless.txt"
+jq -s --slurpfile old "$data" '
+ ($old[0].servers|map(select(.active))|.[0].raw_uri // "") as $activeURI |
+ (map(select(.raw_uri==$activeURI))|.[0].id // -1) as $active |
+ {url:"http://127.0.0.1:18080/vless.txt",last_updated:(now|todate),active_id:$active,servers:map(.active=(.id==$active))}
+' "$tmp/servers.jsonl" > "$tmp/subscription.json"
+[ -s "$tmp/subscription.json" ] || { echo 'Cannot preserve active server'; exit 1; }
+cp "$data" "$root/subscription.previous.json"
+sh /opt/etc/init.d/S99xkeen-panel stop >/dev/null
+cp "$tmp/vless.txt" /opt/var/subscription/vless.txt.new
+mv /opt/var/subscription/vless.txt.new /opt/var/subscription/vless.txt
+cp "$tmp/subscription.json" "$data.new"; mv "$data.new" "$data"
+if [ "$mode" != import ]; then
+ cp "$tmp/body" /opt/var/subscription/oversub.txt
+fi
+if [ "$mode" = change ]; then cp "$tmp/source-url" "$root/source-url"; fi
+sh /opt/etc/init.d/S99xkeen-panel start >/dev/null
+echo "VLESS servers: $i. Active Xray connection unchanged."
+if [ "$(jq -r '.active_id' "$data")" = -1 ]; then
+ echo 'Previous server not in new list. Select a server manually.'
+fi
