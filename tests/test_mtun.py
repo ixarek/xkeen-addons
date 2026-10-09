@@ -125,6 +125,18 @@ case " $* " in *' -C '*) exit 1;; esac
             self.assertIsNotNone(match)
             self.assertEqual(base64.b64decode(match[1]).decode(), (REPO / "scripts" / name).read_text())
 
+    def test_prepare_with_no_clients_does_not_add_source_rules(self):
+        self.write(self.bin / "ip", '#!/bin/sh\nprintf "ip %s\\n" "$*" >> "$TEST_TRACE"\n')
+        home, run = self.root / "home", self.root / "run"
+        run.mkdir()
+        self.write(home / "clients", "")
+        result = self.shell('MT_HOME=$1; MT_RUN=$2; mt_guard_routes', posix(home), posix(run))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        trace = (self.root / "trace").read_text()
+        self.assertIn('unreachable default', trace)
+        self.assertNotIn('rule add', trace)
+        self.assertEqual((run / "applied-clients").read_text(), "")
+
     def test_check_mode_does_not_install_or_write_configuration(self):
         opt = self.root / "opt"
         (opt / "etc").mkdir(parents=True)
@@ -183,6 +195,7 @@ class RealMihomo(TunScripts):
     test_client_validation_rejects_injection_and_invalid_addresses = None
     test_routes_and_dns_are_limited_to_selected_client = None
     test_embedded_scripts_match = None
+    test_prepare_with_no_clients_does_not_add_source_rules = None
     test_check_mode_does_not_install_or_write_configuration = None
     test_shutdown_preserves_autostart_but_explicit_disable_removes_it = None
 
