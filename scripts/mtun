@@ -101,6 +101,7 @@ case "${1:-status}" in
   cp "$MT_HOME/clients" "$MT_HOME/clients.previous"
   cp "$tmp/clients" "$MT_HOME/clients.new"; mv "$MT_HOME/clients.new" "$MT_HOME/clients"
   sh "$service" firewall
+  while read -r client mac; do conntrack -D -s "$client" >/dev/null 2>&1 || true; done < "$MT_HOME/clients"
   sync; echo 'Clients updated. Reserve their IPv4 addresses in Keenetic DHCP.'
  ;;
  start) sh "$service" enable;;

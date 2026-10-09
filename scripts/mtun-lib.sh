@@ -76,7 +76,8 @@ mt_validate_provider() (
 mt_guard_routes() {
  # The table always ends in unreachable, even if the TUN process crashes.
  # LAN management uses the local table (priority 0) and explicit LAN routes.
- mt_validate_clients "$MT_HOME/clients" || mt_die 'Invalid clients file (IPv4 MAC per line).'
+ [ -f "$MT_HOME/clients" ] || mt_die 'Clients file missing.'
+ if [ -s "$MT_HOME/clients" ]; then mt_validate_clients "$MT_HOME/clients" || mt_die 'Invalid clients file (IPv4 MAC per line).'; fi
  ip -4 route replace unreachable default metric 32760 table "$MT_TABLE"
  ip -4 route show table main scope link | while IFS= read -r mt_route; do
   # Copy only connected LAN networks, never WAN or broad private-IP bypasses.

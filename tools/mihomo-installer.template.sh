@@ -7,7 +7,7 @@ PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 phase() { printf '\n== %s ==\n' "$*"; }
-case "${1:-}" in ''|--check) ;; --help|-h) echo 'Usage: sh install-mihomo-tun.sh [--check]'; exit 0;; *) die 'Unknown option.';; esac
+case "${1:-}" in ''|--check|--prepare) ;; --help|-h) echo 'Usage: sh install-mihomo-tun.sh [--check|--prepare]'; exit 0;; *) die 'Unknown option.';; esac
 [ "$(id -u)" = 0 ] || die 'Run as root through Entware SSH.'
 [ "$(uname -m)" = aarch64 ] || die 'Only ARM64/aarch64 is supported.'
 command -v opkg >/dev/null || die 'Install Entware on USB manually first.'
@@ -57,10 +57,13 @@ stty echo <&3; printf '\n' >&3
 case "$url" in https://?*) ;; *) die 'HTTPS URL required.';; esac
 printf '%s\n' "$url" > "$tmp/source-url"
 unset url
-echo 'Choose the PC that should use TUN. Reserve its IPv4 in Keenetic DHCP.'
-ip -4 neigh show dev br0 2>/dev/null || true
-prompt 'PC IPv4 address (for example 192.168.1.50): '
-client_ip=$answer
+client_ip=''; mac=''
+if [ "${1:-}" != --prepare ]; then
+ echo 'Choose the PC that should use TUN. Reserve its IPv4 in Keenetic DHCP.'
+ ip -4 neigh show dev br0 2>/dev/null || true
+ prompt 'PC IPv4 address (for example 192.168.1.50): '
+ client_ip=$answer
+fi
 phase 'Entware dependencies'
 opkg update
 opkg install curl ca-bundle jq tar gzip ip-full conntrack cron coreutils-nohup
@@ -69,10 +72,14 @@ __TUN_PAYLOADS__
 chmod 755 /opt/sbin/mtun /opt/etc/init.d/S80mihomo-tun
 chmod 600 /opt/lib/mtun-lib.sh
 . /opt/lib/mtun-lib.sh
-mt_ipv4 "$client_ip" || die 'Invalid client IPv4 address.'
-ip -4 route get "$client_ip" | grep -q ' dev br0 ' || die 'Client must be on the main br0 LAN.'
 lan_ip=$(ip -4 addr show br0 | awk '/inet / {split($2,a,"/"); print a[1]; exit}')
 mt_ipv4 "$lan_ip" || die 'Cannot identify LAN IPv4 on br0.'
+if [ "${1:-}" = --prepare ]; then
+ if [ -f "$MT_HOME/clients" ]; then cp "$MT_HOME/clients" "$tmp/clients"; else : > "$tmp/clients"; fi
+ echo 'Prepare mode: no new clients will be assigned to TUN.'
+else
+mt_ipv4 "$client_ip" || die 'Invalid client IPv4 address.'
+ip -4 route get "$client_ip" | grep -q ' dev br0 ' || die 'Client must be on the main br0 LAN.'
 [ "$client_ip" != "$lan_ip" ] || die 'Enter the PC address, not the router address.'
 ping -c 1 -W 1 "$client_ip" >/dev/null 2>&1 || true
 mac=$(ip -4 neigh show "$client_ip" dev br0 | awk '/lladdr/ {for(i=1;i<NF;i++) if($i=="lladdr") {print $(i+1); exit}}')
@@ -81,6 +88,7 @@ prompt "PC MAC address [$mac]: "
 mac=${answer:-$mac}
 printf '%s %s\n' "$client_ip" "$mac" > "$tmp/clients"
 mt_validate_clients "$tmp/clients" || die 'Invalid client MAC address. Find it in Keenetic device details.'
+fi
 # Refuse routing-table collisions on first installation. Our own files identify
 # a repeat installation, but no unrelated priority-100 rules are deleted.
 if [ ! -f "$MT_HOME/config.json" ]; then
@@ -132,7 +140,7 @@ NETFILTER
 chmod 755 /opt/etc/ndm/netfilter.d/100-mihomo-tun.sh
 sh /opt/etc/init.d/S80mihomo-tun enable
 # Flush only this PC's old conntrack sessions, not the entire home network.
-conntrack -D -s "$client_ip" >/dev/null 2>&1 || true
+if [ -n "$client_ip" ]; then conntrack -D -s "$client_ip" >/dev/null 2>&1 || true; fi
 phase 'Select a working server'
 mtun best || die 'No server passed HTTPS. TUN stays guarded; use the panel to select another server or mtun stop.'
 mtun check
@@ -143,7 +151,8 @@ pidof cron >/dev/null || die 'Entware cron did not start.'
 sync
 phase 'Ready'
 mtun panel
-echo "PC: $client_ip ($mac). Reserve this IPv4 address in Keenetic DHCP."
+if [ -n "$client_ip" ]; then echo "PC: $client_ip ($mac). Reserve this IPv4 address in Keenetic DHCP."
+else echo 'No new PC assigned. Add one later: mtun clients IPv4 MAC'; fi
 echo 'In MetaCubeXD, add the API address above and its Secret, then select PROXY.'
 echo 'Commands: mtun list; mtun use NUMBER; mtun update; mtun change; mtun stop; mtun start.'
 echo 'PC proxy/VPN settings stay unchanged. Corporate VPN compatibility must be checked on that PC.'

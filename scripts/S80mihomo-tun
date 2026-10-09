@@ -15,7 +15,8 @@ echo $$ > "$MT_RUN/lock/pid"
 trap 'rm -f "$MT_RUN/lock/pid"; rmdir "$MT_RUN/lock"' EXIT
 start_core() {
  [ -f "$MT_HOME/enabled" ] || return 0
- mt_validate_clients "$MT_HOME/clients" || mt_die 'Configure mtun clients first.'
+ [ -f "$MT_HOME/clients" ] || mt_die 'Clients file missing.'
+ if [ -s "$MT_HOME/clients" ]; then mt_validate_clients "$MT_HOME/clients" || mt_die 'Invalid TUN clients.'; fi
  mt_apply
  if ! mt_pid; then
   [ -c /dev/net/tun ] || mt_die '/dev/net/tun unavailable; enable TUN support in firmware.'
