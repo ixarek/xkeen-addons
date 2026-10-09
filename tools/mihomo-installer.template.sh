@@ -7,7 +7,17 @@ PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 phase() { printf '\n== %s ==\n' "$*"; }
-case "${1:-}" in ''|--check|--prepare) ;; --help|-h) echo 'Usage: sh install-mihomo-tun.sh [--check|--prepare]'; exit 0;; *) die 'Unknown option.';; esac
+mode=install; prepare=no; assets=''
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  --check) mode=check;;
+  --prepare) prepare=yes;;
+  --offline) shift; [ "$#" -gt 0 ] || die '--offline requires an asset directory.'; assets=$1; [ -d "$assets" ] || die 'Offline asset directory missing.';;
+  --help|-h) echo 'Usage: sh install-mihomo-tun.sh [--check] [--prepare] [--offline DIR]'; exit 0;;
+  *) die 'Unknown option.';;
+ esac
+ shift
+done
 [ "$(id -u)" = 0 ] || die 'Run as root through Entware SSH.'
 [ "$(uname -m)" = aarch64 ] || die 'Only ARM64/aarch64 is supported.'
 command -v opkg >/dev/null || die 'Install Entware on USB manually first.'
@@ -17,15 +27,16 @@ free_kb=$(df -Pk /opt | awk 'NR==2 {print $4}')
 [ "$free_kb" -ge 262144 ] || die 'Need at least 256 MiB free on the Entware USB filesystem.'
 ram_kb=$(awk '/MemAvailable:/ {a=$2} /MemFree:/ {f=$2} /^Buffers:/ {b=$2} /^Cached:/ {c=$2} END {print a?a:f+b+c}' /proc/meminfo)
 [ "$ram_kb" -ge 131072 ] || die 'Need at least 128 MiB currently available RAM (USB does not increase RAM).'
-for utility in ip iptables base64 sha256sum; do command -v "$utility" >/dev/null || die "Required command missing: $utility"; done
+for utility in ip base64 sha256sum; do command -v "$utility" >/dev/null || die "Required command missing: $utility"; done
 if [ -x /opt/etc/init.d/S05xkeen ] || [ -x /opt/etc/init.d/S24xray ] || [ -x /opt/etc/init.d/S24mihomo ]; then
  die 'An existing XKeen installation was found. Use clean Entware to avoid competing firewall/routing services.'
 fi
-if [ "${1:-}" = --check ]; then
+if [ "$mode" = check ]; then
  echo "ARM64/Entware checks OK. Free disk: $free_kb KiB; available RAM: $ram_kb KiB."
  if [ -c /dev/net/tun ]; then echo '/dev/net/tun exists; actual TUN creation is checked during installation.'
  else echo '/dev/net/tun missing: installation will try modprobe tun; firmware TUN support is required.'; fi
  echo 'Plan: Mihomo v1.19.32 + MetaCubeXD v1.273.1 + native IPv4 TUN for selected IPv4/MAC devices.'
+ command -v iptables >/dev/null || echo 'iptables will be installed from Entware.'
  echo 'No changes made.'
  exit 0
 fi
@@ -58,15 +69,16 @@ case "$url" in https://?*) ;; *) die 'HTTPS URL required.';; esac
 printf '%s\n' "$url" > "$tmp/source-url"
 unset url
 client_ip=''; mac=''
-if [ "${1:-}" != --prepare ]; then
+if [ "$prepare" != yes ]; then
  echo 'Choose the PC that should use TUN. Reserve its IPv4 in Keenetic DHCP.'
  ip -4 neigh show dev br0 2>/dev/null || true
  prompt 'PC IPv4 address (for example 192.168.1.50): '
  client_ip=$answer
 fi
 phase 'Entware dependencies'
-opkg update
-opkg install curl ca-bundle jq tar gzip ip-full conntrack cron coreutils-nohup
+if [ -z "$assets" ]; then opkg update; fi
+opkg install curl ca-bundle jq tar gzip ip-full iptables conntrack cron coreutils-nohup
+command -v iptables >/dev/null || die 'iptables installation failed.'
 mkdir -p /opt/lib /opt/etc/mihomo-tun /opt/var/run /opt/etc/ndm/netfilter.d
 __TUN_PAYLOADS__
 chmod 755 /opt/sbin/mtun /opt/etc/init.d/S80mihomo-tun
@@ -74,7 +86,7 @@ chmod 600 /opt/lib/mtun-lib.sh
 . /opt/lib/mtun-lib.sh
 lan_ip=$(ip -4 addr show br0 | awk '/inet / {split($2,a,"/"); print a[1]; exit}')
 mt_ipv4 "$lan_ip" || die 'Cannot identify LAN IPv4 on br0.'
-if [ "${1:-}" = --prepare ]; then
+if [ "$prepare" = yes ]; then
  if [ -f "$MT_HOME/clients" ]; then cp "$MT_HOME/clients" "$tmp/clients"; else : > "$tmp/clients"; fi
  echo 'Prepare mode: no new clients will be assigned to TUN.'
 else
@@ -95,7 +107,13 @@ if [ ! -f "$MT_HOME/config.json" ]; then
  [ -z "$(ip -4 route show table 2023 2>/dev/null)" ] || die 'Routing table 2023 is already in use.'
  if ip -4 rule show | grep -Eq '^100:'; then die 'Routing priority 100 is already in use.'; fi
 fi
-fetch() { curl --noproxy '*' --proto '=https' --proto-redir '=https' -fLsS --connect-timeout 15 --max-time 240 "$1" -o "$2"; }
+fetch() {
+ if [ -n "$assets" ]; then
+  cp "$assets/${1##*/}" "$2" || die 'Required offline archive missing.'
+ else
+  curl --noproxy '*' --proto '=https' --proto-redir '=https' -fLsS --connect-timeout 15 --max-time 240 "$1" -o "$2"
+ fi
+}
 phase 'Verified Mihomo core and panel downloads'
 fetch https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-arm64-v1.19.32.gz "$tmp/mihomo.gz"
 echo "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0  $tmp/mihomo.gz" | sha256sum -c - >/dev/null || die 'Mihomo checksum mismatch.'
@@ -109,7 +127,11 @@ tar -xzf "$tmp/ui.tgz" -C "$tmp/ui"
 [ -f "$tmp/ui/index.html" ] || die 'Invalid panel archive.'
 phase 'Subscription download and isolated provider validation'
 url=$(cat "$tmp/source-url")
-curl --noproxy '*' --proto '=https' --proto-redir '=https' -fLsS --connect-timeout 15 --max-time 120 --max-filesize 4194304 "$url" > "$tmp/subscription.txt" 2> "$tmp/download.log" || die 'Subscription download failed. Initial installation requires normal internet.'
+if [ -n "$assets" ]; then
+ cp "$assets/subscription.txt" "$tmp/subscription.txt" || die 'Offline subscription.txt missing.'
+else
+ curl --noproxy '*' --proto '=https' --proto-redir '=https' -fLsS --connect-timeout 15 --max-time 120 --max-filesize 4194304 "$url" > "$tmp/subscription.txt" 2> "$tmp/download.log" || die 'Subscription download failed. Initial installation requires normal internet.'
+fi
 unset url
 backup="$MT_HOME/backup-$(date +%Y%m%d-%H%M%S)-$$"
 mkdir "$backup"
